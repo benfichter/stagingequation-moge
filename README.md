@@ -33,6 +33,8 @@ Response:
     "area": 13.12,
     "unit": "m",
     "calibration_factor": 1.05
-  }
+  },
+  "ceiling_overlay_base64": "data:image/png;base64,...",
+  "ceiling_corners": [[120, 80], [520, 90], [110, 420], [540, 430]]
 }
 ```
