@@ -3,7 +3,7 @@ FROM runpod/pytorch:0.7.0-ubuntu2204-cu1241-torch240
 WORKDIR /workspace
 
 COPY requirements.txt /workspace/requirements.txt
-RUN pip install --no-cache-dir -r /workspace/requirements.txt
+RUN python -m pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY . /workspace
 
