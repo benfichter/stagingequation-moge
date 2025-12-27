@@ -9,4 +9,4 @@ COPY . /workspace
 
 ENV RUNPOD_HANDLER=handler.handler
 
-CMD ["python", "-m", "runpod"]
+CMD ["python", "/workspace/runpod_entrypoint.py"]
