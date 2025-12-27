@@ -15,6 +15,34 @@ pip install -r moge_service/requirements.txt
 python -m uvicorn moge_service.app:app --host 0.0.0.0 --port 8001
 ```
 
+## RunPod Serverless
+
+1) Build and push the serverless image:
+
+```bash
+docker build -f Dockerfile.serverless -t <your-registry>/stagingequation-moge:latest .
+docker push <your-registry>/stagingequation-moge:latest
+```
+
+2) Create a RunPod Serverless endpoint using that image.
+
+3) RunPod handler expects:
+
+```json
+{
+  "input": {
+    "image_base64": "<base64>",
+    "calibration_height_m": 2.4
+  }
+}
+```
+
+For warmup:
+
+```json
+{ "input": { "warm": true } }
+```
+
 ## Request
 
 `POST /infer` with multipart form-data:

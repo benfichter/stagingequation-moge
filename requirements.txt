@@ -5,3 +5,4 @@ numpy>=1.26
 opencv-python-headless>=4.10
 git+https://github.com/microsoft/MoGe.git
 torch>=2.2
+runpod>=1.6
