@@ -90,6 +90,17 @@ def _floor_points(points: np.ndarray, mask: np.ndarray, normal: np.ndarray | Non
     return floor_points if floor_points.size else valid_points
 
 
+def _order_corners(corners: np.ndarray) -> list[list[int]]:
+    sums = corners[:, 0] + corners[:, 1]
+    diffs = corners[:, 0] - corners[:, 1]
+    top_left = corners[int(np.argmin(sums))]
+    bottom_right = corners[int(np.argmax(sums))]
+    top_right = corners[int(np.argmin(diffs))]
+    bottom_left = corners[int(np.argmax(diffs))]
+    ordered = [top_left, top_right, bottom_left, bottom_right]
+    return [[int(point[0]), int(point[1])] for point in ordered]
+
+
 def _estimate_corners(contour: np.ndarray) -> list[list[int]]:
     hull = cv2.convexHull(contour)
     perimeter = cv2.arcLength(hull, True)
@@ -121,11 +132,19 @@ def _estimate_corners(contour: np.ndarray) -> list[list[int]]:
         else:
             corners = corners[:4]
 
-    return [[int(point[0]), int(point[1])] for point in corners]
+    if len(corners) < 4:
+        rect = cv2.minAreaRect(contour)
+        corners = cv2.boxPoints(rect)
+
+    return _order_corners(np.array(corners, dtype=np.int32))
 
 
 def _build_ceiling_overlay(
-    image_bgr: np.ndarray, mask: np.ndarray, normal_map: np.ndarray | None
+    image_bgr: np.ndarray,
+    mask: np.ndarray,
+    normal_map: np.ndarray | None,
+    points_map: np.ndarray,
+    dimensions: dict[str, float],
 ) -> dict[str, Any]:
     if normal_map is None:
         return {}
@@ -146,8 +165,86 @@ def _build_ceiling_overlay(
 
     overlay = image_bgr.copy()
     cv2.drawContours(overlay, [largest], -1, (0, 255, 0), 3)
+
+    contour_points = largest[:, 0, :]
+    corner_indices = []
+    snapped_corners: list[list[int]] = []
+    for corner in corners:
+        deltas = contour_points - np.array(corner)
+        distances = np.sqrt(np.sum(deltas * deltas, axis=1))
+        closest_idx = int(np.argmin(distances))
+        corner_indices.append(closest_idx)
+        snapped = contour_points[closest_idx]
+        snapped_corners.append([int(snapped[0]), int(snapped[1])])
+
+    corners = snapped_corners
+    sorted_corner_data = sorted(zip(corner_indices, corners))
+
     for corner in corners:
         cv2.circle(overlay, (corner[0], corner[1]), 8, (255, 0, 255), -1)
+    for i in range(len(sorted_corner_data)):
+        idx1, _ = sorted_corner_data[i]
+        idx2, _ = sorted_corner_data[(i + 1) % len(sorted_corner_data)]
+        if idx1 < idx2:
+            segment_indices = list(range(idx1, idx2 + 1))
+        else:
+            segment_indices = list(range(idx1, len(contour_points))) + list(range(0, idx2 + 1))
+
+        total_dist = 0.0
+        for j in range(len(segment_indices) - 1):
+            pt_a = contour_points[segment_indices[j]]
+            pt_b = contour_points[segment_indices[j + 1]]
+            if mask[pt_a[1], pt_a[0]] > 0 and mask[pt_b[1], pt_b[0]] > 0:
+                pt_a_3d = points_map[pt_a[1], pt_a[0]]
+                pt_b_3d = points_map[pt_b[1], pt_b[0]]
+                total_dist += float(np.linalg.norm(pt_a_3d - pt_b_3d))
+
+        if total_dist > 0:
+            mid_idx = segment_indices[len(segment_indices) // 2]
+            mid_pt = contour_points[mid_idx]
+            cv2.putText(
+                overlay,
+                f"{total_dist:.2f}m",
+                (int(mid_pt[0]) - 40, int(mid_pt[1]) - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (255, 255, 255),
+                3,
+            )
+
+    pts = largest[:, 0, :]
+    min_y = int(np.min(pts[:, 1]))
+    min_x = int(np.min(pts[:, 0]))
+    top_pts = pts[pts[:, 1] < min_y + 30]
+    left_pts = pts[pts[:, 0] < min_x + 30]
+
+    if len(top_pts) > 1:
+        top_pts_sorted = top_pts[np.argsort(top_pts[:, 0])]
+        mid_x = int((top_pts_sorted[0][0] + top_pts_sorted[-1][0]) // 2)
+        mid_y = int((top_pts_sorted[0][1] + top_pts_sorted[-1][1]) // 2)
+        cv2.putText(
+            overlay,
+            f"{dimensions['depth']:.2f}m",
+            (mid_x - 60, mid_y + 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (255, 0, 255),
+            3,
+        )
+
+    if len(left_pts) > 1:
+        left_pts_sorted = left_pts[np.argsort(left_pts[:, 1])]
+        mid_x = int((left_pts_sorted[0][0] + left_pts_sorted[-1][0]) // 2)
+        mid_y = int((left_pts_sorted[0][1] + left_pts_sorted[-1][1]) // 2)
+        cv2.putText(
+            overlay,
+            f"{dimensions['width']:.2f}m",
+            (mid_x + 20, mid_y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (255, 0, 255),
+            3,
+        )
 
     success, encoded = cv2.imencode(".png", overlay)
     if not success:
@@ -192,12 +289,14 @@ def infer_dimensions(
     area = width * depth
 
     calibration_factor = None
+    points_for_overlay = points
     if calibration_height_m and height > 0:
         calibration_factor = float(calibration_height_m / height)
         width *= calibration_factor
         depth *= calibration_factor
         height *= calibration_factor
         area *= calibration_factor ** 2
+        points_for_overlay = points * calibration_factor
 
     dimensions = {
         "width": width,
@@ -207,5 +306,5 @@ def infer_dimensions(
         "unit": "m",
         "calibration_factor": calibration_factor,
     }
-    overlay = _build_ceiling_overlay(image_bgr, mask, normal_map)
+    overlay = _build_ceiling_overlay(image_bgr, mask, normal_map, points_for_overlay, dimensions)
     return {"dimensions": dimensions, **overlay}
